@@ -1,6 +1,14 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 
+
+// for logic purposes
+
+#include <signal.h>
+#include <unistd.h>
+#include <sys/types.h>
+
+//for QT purposes
 #include <QFile>
 #include <QDir>
 #include <QTextStream>
@@ -8,6 +16,25 @@
 #include <QTimer>
 #include <QStringList>
 #include <QRegularExpression>
+#include <QMessageBox>
+
+
+
+uid_t getProcessUID(int pid) {
+    QFile statusFile("/proc/" + QString::number(pid) + "/status");
+    if (statusFile.open(QIODevice::ReadOnly)) {
+        QTextStream in(&statusFile);
+        QString line;
+        while (in.readLineInto(&line)) {
+            if (line.startsWith("Uid:")) {
+                QStringList parts = line.split(QRegularExpression("\\s+"));
+                return parts[1].toUInt();  // Return the UID
+            }
+        }
+        statusFile.close();
+    }
+    return -1;  // Return an invalid UID on failure
+}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -37,6 +64,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Connect signals and slots
     connect(refreshButton, &QPushButton::clicked, this, &MainWindow::updateProcesses);
+    connect(killButton, &QPushButton::clicked, this, &MainWindow::killProcess);
 
     // Timer to auto-refresh every 5 seconds
     refreshTimer = new QTimer(this);
@@ -54,6 +82,32 @@ MainWindow::~MainWindow()
 void MainWindow::updateProcesses()
 {
     fetchProcesses();
+}
+
+void MainWindow::killProcess(){
+    int row = processTable->currentRow();
+    if (row == -1) {
+        return;
+    }
+
+    auto pidItem = processTable->item(row, 0);
+    if (!pidItem) {
+        QMessageBox::warning(this, "Error", "Invalid process selected");
+        return;
+    }
+
+     int pid = pidItem->text().toInt();
+    uid_t pr = getProcessUID(pid);
+    if( pr == 0){
+         QMessageBox::warning(this, "Error", "Cannot kill system process");
+         return;
+     }
+    if (kill(pid, SIGKILL) == -1) {
+        QMessageBox::critical(this, "Error", "Failed to kill process");
+    } else {
+        QMessageBox::information(this, "Success", "Process killed successfully");
+        updateProcesses();  //refresh the table
+    }
 }
 
 void MainWindow::fetchProcesses()

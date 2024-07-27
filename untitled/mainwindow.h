@@ -21,6 +21,7 @@ public:
 
 private slots:
     void updateProcesses();
+    void killProcess();
 
 private:
     Ui::MainWindow *ui;
