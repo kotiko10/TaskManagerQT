@@ -20,29 +20,16 @@
 
 
 
-uid_t getProcessUID(int pid) {
-    QFile statusFile("/proc/" + QString::number(pid) + "/status");
-    if (statusFile.open(QIODevice::ReadOnly)) {
-        QTextStream in(&statusFile);
-        QString line;
-        while (in.readLineInto(&line)) {
-            if (line.startsWith("Uid:")) {
-                QStringList parts = line.split(QRegularExpression("\\s+"));
-                return parts[1].toUInt();  // Return the UID
-            }
-        }
-        statusFile.close();
-    }
-    return -1;  // Return an invalid UID on failure
-}
-
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
 
-    // Set up the UI components
+    tabWidget = new QTabWidget(this);
+
+    // CPU Tab
+    cpuTab = new QWidget(this);
     processTable = new QTableWidget(this);
     processTable->setColumnCount(4);
     processTable->setHorizontalHeaderLabels(QStringList() << "PID" << "Name" << "CPU Usage (%)" << "Memory Usage (KB)");
@@ -50,17 +37,27 @@ MainWindow::MainWindow(QWidget *parent)
     processTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
     refreshButton = new QPushButton("Refresh", this);
-    killButton = new QPushButton("Kill", this);
+    killButton = new QPushButton("Kill Process", this);
 
+    QVBoxLayout *cpuLayout = new QVBoxLayout;
+    cpuLayout->addWidget(processTable);
+    cpuLayout->addWidget(refreshButton);
+    cpuLayout->addWidget(killButton);
+    cpuTab->setLayout(cpuLayout);
 
-    QVBoxLayout *layout = new QVBoxLayout;
-    layout->addWidget(processTable);
-    layout->addWidget(refreshButton);
-    layout->addWidget(killButton);
+    tabWidget->addTab(cpuTab, "Processes");
 
-    QWidget *centralWidget = new QWidget(this);
-    centralWidget->setLayout(layout);
-    setCentralWidget(centralWidget);
+    // GPU Tab
+    gpuTab = new QWidget(this);
+    gpuInfoLabel = new QLabel(this);
+
+    QVBoxLayout *gpuLayout = new QVBoxLayout;
+    gpuLayout->addWidget(gpuInfoLabel);
+    gpuTab->setLayout(gpuLayout);
+
+    tabWidget->addTab(gpuTab, "GPU Info");
+
+    setCentralWidget(tabWidget);
 
     // Connect signals and slots
     connect(refreshButton, &QPushButton::clicked, this, &MainWindow::updateProcesses);
@@ -72,6 +69,7 @@ MainWindow::MainWindow(QWidget *parent)
     refreshTimer->start(5000);
 
     updateProcesses();
+    updateGPUInfo();
 }
 
 MainWindow::~MainWindow()
@@ -82,32 +80,6 @@ MainWindow::~MainWindow()
 void MainWindow::updateProcesses()
 {
     fetchProcesses();
-}
-
-void MainWindow::killProcess(){
-    int row = processTable->currentRow();
-    if (row == -1) {
-        return;
-    }
-
-    auto pidItem = processTable->item(row, 0);
-    if (!pidItem) {
-        QMessageBox::warning(this, "Error", "Invalid process selected");
-        return;
-    }
-
-     int pid = pidItem->text().toInt();
-    uid_t pr = getProcessUID(pid);
-    if( pr == 0){
-         QMessageBox::warning(this, "Error", "Cannot kill system process");
-         return;
-     }
-    if (kill(pid, SIGKILL) == -1) {
-        QMessageBox::critical(this, "Error", "Failed to kill process");
-    } else {
-        QMessageBox::information(this, "Success", "Process killed successfully");
-        updateProcesses();  //refresh the table
-    }
 }
 
 void MainWindow::fetchProcesses()
@@ -171,5 +143,65 @@ void MainWindow::parseStatFile(const QString& statFileContent, int& pid, QString
             }
         }
         statusFile.close();
+    }
+}
+
+uid_t MainWindow::getProcessUID(int pid)
+{
+    QFile statusFile("/proc/" + QString::number(pid) + "/status");
+    if (statusFile.open(QIODevice::ReadOnly)) {
+        QTextStream in(&statusFile);
+        QString line;
+        while (in.readLineInto(&line)) {
+            if (line.startsWith("Uid:")) {
+                QStringList parts = line.split(QRegularExpression("\\s+"));
+                return parts[1].toUInt();  // Return the UID
+            }
+        }
+        statusFile.close();
+    }
+    return -1;  // Return an invalid UID on failure
+}
+
+void MainWindow::killProcess()
+{
+    int row = processTable->currentRow();
+    if (row == -1) {
+        QMessageBox::warning(this, "Error", "No process selected");
+        return;
+    }
+
+    auto pidItem = processTable->item(row, 0);
+    if (!pidItem) {
+        QMessageBox::warning(this, "Error", "Invalid process selected");
+        return;
+    }
+
+    int pid = pidItem->text().toInt();
+    uid_t uid = getProcessUID(pid);
+    if (uid == 0) {  // Check if the process is owned by root
+        QMessageBox::warning(this, "Error", "Cannot kill system process");
+        return;
+    }
+
+    if (kill(pid, SIGKILL) == -1) {
+        QMessageBox::critical(this, "Error", "Failed to kill process");
+    } else {
+        QMessageBox::information(this, "Success", "Process killed successfully");
+        updateProcesses();  // Refresh the process list
+    }
+}
+
+void MainWindow::updateGPUInfo()
+{
+    QProcess process;
+    process.start("nvidia-smi --query-gpu=name,memory.total,memory.used,temperature.gpu --format=csv,noheader");
+    process.waitForFinished();
+    QString output = process.readAllStandardOutput();
+
+    if (output.isEmpty()) {
+        gpuInfoLabel->setText("No NVIDIA GPU detected or nvidia-smi not available.");
+    } else {
+        gpuInfoLabel->setText(output);
     }
 }
